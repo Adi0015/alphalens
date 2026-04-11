@@ -13,7 +13,8 @@ TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "JPM",
            "GS", "SPY", "QQQ", "TSLA", "NVDA"]
 
 END_DATE   = datetime.today().strftime("%Y-%m-%d")
-START_DATE = (datetime.today() - timedelta(days=5*365)).strftime("%Y-%m-%d")
+START_DATE       = (datetime.today() - timedelta(days=5*365)).strftime("%Y-%m-%d")
+FRED_START_DATE  = (datetime.today() - timedelta(days=5*365 + 180)).strftime("%Y-%m-%d")
 
 FRED_SERIES = {
     "cpi"         : "CPIAUCSL",
@@ -42,31 +43,39 @@ def fetch_market_data(tickers, start, end):
 def fetch_macro_data(series_dict, start, end):
     print(f"\n[2/3] Fetching {len(series_dict)} FRED macro series...")
     api_key = os.getenv("FRED_API_KEY")
-
     if not api_key:
         raise ValueError("FRED_API_KEY missing from .env")
+
     fred   = Fred(api_key=api_key)
     frames = {}
 
     for name, sid in series_dict.items():
         try:
-            s = fred.get_series(sid, observation_start=start, observation_end=end)
+            # Fetch extra 6 months back so merge_asof always has a prior value
+            s = fred.get_series(sid)
+            s = s[s.index <= end]          # only trim the end, not the start
             frames[name] = s
-            print(f"    {name:15s} ({sid}): {len(s)} obs")
+            print(f"    {name:15s} ({sid}): {len(s)} obs | "
+                  f"{s.index.min().date()} → {s.index.max().date()}")
         except Exception as e:
             print(f"    WARN: {name} failed — {e}")
 
+    if not frames:
+        raise RuntimeError("No FRED data fetched — check API key")
+
     macro_df = pd.DataFrame(frames)
     macro_df.index = pd.to_datetime(macro_df.index)
-    bdays    = pd.date_range(start=start, end=end, freq="B")
-    macro_df = macro_df.reindex(bdays).ffill()
+
+    # Forward-fill to every business day — starting from FRED_START_DATE
+    bdays    = pd.date_range(start=FRED_START_DATE, end=end, freq="B")
+    macro_df = macro_df.reindex(bdays).ffill().dropna()  # drop rows still NaN after ffill
     macro_df.index.name = "date"
     macro_df = macro_df.reset_index()
+
     macro_df["yield_spread"] = macro_df["yield_10y"] - macro_df["yield_2y"]
     macro_df["cpi_mom"]      = macro_df["cpi"].pct_change()
 
-    print(f"    Macro shape (forward-filled): {macro_df.shape}")
-
+    print(f"    Macro shape after forward-fill: {macro_df.shape}")
     return macro_df
 
 # ── 3. Merge & Save ───────────────────────────────────────────────────────────
