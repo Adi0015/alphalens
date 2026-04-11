@@ -76,9 +76,9 @@ Pulls and merges two data sources into clean Parquet files:
 Output files:
 ```
 data/
-├── market_data.parquet    (~12,500 rows × 8 cols)
+├── market_data.parquet    (~12,560 rows × 9 cols)
 ├── macro_data.parquet     (~1,300 rows × 8 cols)
-└── merged_data.parquet    (~12,500 rows × 14 cols)
+└── merged_data.parquet    (~12,550 rows × 16 cols)
 ```
 
 ---
@@ -298,8 +298,9 @@ alphalens/
 ## Interview Talking Points
 
 **Data Science**
-- Used `merge_asof` for time-series join — explains why a regular merge fails on monthly/daily data
-- Forward-filled macro data to avoid gaps on non-reporting days
+- Used `merge_asof` with `direction="backward"` — correct way to join monthly macro onto daily market data without look-ahead bias
+- Extended FRED fetch window by 6 months before market start date to eliminate early-date nulls where no prior observation existed
+- Only expected nulls are `daily_return` and `log_return` on each ticker's first row — mathematically unavoidable
 
 **Machine Learning**
 - Strict time-series train/test split to prevent look-ahead leakage
