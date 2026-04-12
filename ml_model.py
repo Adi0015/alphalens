@@ -322,11 +322,21 @@ if __name__ == "__main__":
     conf_df.to_csv("notebooks/confidence_analysis.csv", index=False)
     explain_model(best_model, X_test, feature_cols)
 
-    # Save winner
-    joblib.dump(best_model,  "models/best_model.pkl")
+  
+    # Dynamic naming based on winning algorithm
+    model_filename = (best_name.lower()
+                               .replace(" ", "_")
+                               .replace("(", "")
+                               .replace(")", "")) + ".pkl"
+    # e.g. "XGBoost (tuned)" → "xgboost_tuned.pkl"
+
+    joblib.dump(best_model,  f"models/{model_filename}")
+    joblib.dump(best_params, f"models/{model_filename.replace('.pkl', '_params.pkl')}")
     joblib.dump(scaler,      "models/scaler.pkl")
-    joblib.dump(best_params, "models/best_params.pkl")
-    joblib.dump(best_name,   "models/best_model_name.pkl")
+
+    print(f"\n    Saved: models/{model_filename}")
+    print(f"    Saved: models/{model_filename.replace('.pkl', '_params.pkl')}")
+    print(f"    Saved: models/scaler.pkl")
 
     print("\n" + "=" * 55)
     print(f"  Best model : {best_name}")
