@@ -8,7 +8,7 @@
 
 ## What is AlphaLens?
 
-AlphaLens is a personal quantitative investment research platform built from scratch. It ingests 5 years of real market and macroeconomic data, engineers 20+ features, scores financial news sentiment using a fine-tuned NLP model, trains a machine learning model to predict short-term returns, and ties everything together in an interactive Streamlit dashboard — all in one codebase.
+AlphaLens is a personal quantitative investment research platform built from scratch. It ingests 5 years of real market and macroeconomic data, engineers 46 features, scores financial news sentiment using a fine-tuned NLP model, trains a machine learning model to predict short-term returns, and ties everything together in an interactive Streamlit dashboard — all in one codebase.
 
 The project deliberately covers three domains in one place:
 
@@ -21,6 +21,7 @@ The project deliberately covers three domains in one place:
 ## Project Architecture
 
 ![AlphaLens Architecture](notebooks/architecture.svg)
+
 ```
 Raw Data Sources
       │
@@ -33,7 +34,7 @@ Raw Data Sources
             │
             ▼
     feature_engineering.py
-    (RSI, MACD, Bollinger, volume ratios, macro features, target variable)
+    (RSI, MACD, Bollinger, volume ratios, macro features, interaction terms, target variable)
             │
             ▼
     sentiment_engine.py
@@ -41,7 +42,7 @@ Raw Data Sources
             │
             ▼
     ml_model.py
-    (XGBoost classifier → SHAP explainability)
+    (XGBoost + LightGBM tuned via Optuna → SHAP explainability)
             │
             ├── regime_detection.py (Hidden Markov Model)
             ├── options_pricer.py   (Black-Scholes + Monte Carlo)
@@ -71,7 +72,7 @@ Pulls and merges two data sources into clean Parquet files:
 - Monthly FRED observations forward-filled to business days
 - Derived: `yield_spread` (10Y − 2Y), `cpi_mom` (month-over-month CPI change)
 
-**Key engineering decision:** used `pd.merge_asof` with `direction="backward"` to join monthly macro data onto daily market data — the correct approach for time-series data that avoids look-ahead bias.
+**Key engineering decision:** used `pd.merge_asof` with `direction="backward"` to join monthly macro data onto daily market data — the correct approach for time-series data that avoids look-ahead bias. Extended FRED fetch window by 6 months before market start date to eliminate early-date nulls where no prior observation existed.
 
 Output files:
 ```
@@ -85,32 +86,47 @@ data/
 
 ### Module 2 — Feature Engineering (`feature_engineering.py`)
 
-Computes 20+ technical and macro features per ticker per day:
+Computes 46 features per ticker per day across 5 categories:
 
 **Trend indicators**
-- EMA 12, EMA 26
+- EMA 12, EMA 26, EMA 50, EMA 200
 - MACD, MACD Signal, MACD Histogram
+- Above EMA 50/200 flags, EMA 50/200 crossover signal
 
 **Momentum indicators**
-- RSI (14-day)
+- RSI (14-day), RSI 10-day MA, RSI divergence
 - Rate of Change (10-day)
 - Williams %R
 
 **Volatility indicators**
 - Bollinger Bands (upper, lower, width, %B)
 - Average True Range (ATR)
+- Realized volatility (20-day annualized)
+- Z-score mean reversion signal (20-day)
 
 **Volume indicators**
 - On-Balance Volume (OBV)
 - Volume vs 20-day moving average ratio
+- Volume spike flag (>2× average)
 
 **Price-derived features**
 - 5-day and 20-day rolling returns
 - Distance from 52-week high and low
+- Overnight gap (open vs prior close)
+- Price vs SPY relative strength
+
+**Interaction features**
+- RSI × volume spike — oversold + high volume = reversal signal
+- MACD × sentiment — technical + news alignment
+- Volatility × momentum — momentum in high-vol environment
+- Z-score × RSI — double mean-reversion confirmation
+- Yield spread × sentiment — macro + news alignment
 
 **Target variable**
 - `target = 1` if price is higher 5 trading days from now, else `0`
 - Strictly uses future data shifted by 5 days — no look-ahead leakage
+- Final feature matrix: **10,040 rows × 58 columns** (after dropping NaNs from indicators)
+- 46 features used for ML training
 
 ---
 
@@ -130,14 +146,33 @@ FinBERT understands financial language that generic sentiment models miss — e.
 
 ### Module 4 — ML Return Predictor (`ml_model.py`)
 
-Trains a binary classifier to predict 5-day return direction:
+Trains and compares 4 models to predict 5-day return direction:
 
-- **Model:** XGBoost (gradient boosted trees)
-- **Features:** all technical indicators + macro features + sentiment score (~25 total)
-- **Split:** strict time-series split — no random shuffling (avoids leakage)
-- **Benchmark:** logistic regression baseline
-- **Evaluation:** accuracy, F1, ROC-AUC, confusion matrix
-- **Explainability:** SHAP summary plots show which features drive predictions
+- **Winner:** XGBoost tuned via Optuna (50 trials)
+- **Features:** 46 features — technical indicators, macro, sentiment, interaction terms
+- **Split:** strict time-series split cutoff at 2025-06-24 — no shuffling (avoids leakage)
+- **ROC-AUC:** 0.5916 | **Accuracy:** 57.61% (all trades)
+- **At 0.60 confidence threshold:** 62.66% accuracy on 37.7% of trades
+- **Explainability:** SHAP summary + beeswarm plots saved to `notebooks/`
+- **Dynamic model saving:** winning model auto-named `xgboost_tuned.pkl`
+
+**Model comparison results:**
+
+| Model | Accuracy | F1 | ROC-AUC |
+|---|---|---|---|
+| XGBoost (tuned) | 0.5761 | 0.6773 | 0.5916 |
+| Random Forest | 0.5393 | 0.6964 | 0.5725 |
+| LightGBM (tuned) | 0.5413 | 0.7024 | 0.5723 |
+| Logistic Regression | 0.5463 | 0.6415 | 0.5443 |
+
+**Confidence threshold analysis:**
+
+| Threshold | Trades | Coverage | Accuracy |
+|---|---|---|---|
+| 0.50 | 2010 | 100.0% | 57.61% |
+| 0.55 | 1305 | 64.9% | 59.62% |
+| 0.60 | 758 | 37.7% | 62.66% |
+| 0.65 | 339 | 16.9% | 62.83% |
 
 ---
 
@@ -199,7 +234,7 @@ Five exploratory charts are generated by `notebooks/eda.py` (all interactive Plo
 | Data ingestion | `yfinance`, `fredapi`, `pandas`, `pyarrow` |
 | Technical indicators | `ta` |
 | NLP / Sentiment | `transformers` (FinBERT), `torch`, `newsapi-python` |
-| Machine learning | `xgboost`, `scikit-learn`, `shap` |
+| Machine learning | `xgboost`, `lightgbm`, `scikit-learn`, `shap`, `optuna` |
 | Regime detection | `hmmlearn` |
 | Quant finance | `numpy`, `scipy`, `vectorbt` |
 | Visualization | `plotly` |
@@ -231,9 +266,9 @@ cp .env.example .env
 
 # 5. Run the pipeline
 python data_ingestion.py       # Day 1 — fetch & merge data
-python feature_engineering.py  # Day 2 — compute indicators
-python sentiment_engine.py     # Day 2 — score sentiment
-python ml_model.py             # Day 3 — train XGBoost
+python feature_engineering.py  # Day 2 — compute 46 features
+python sentiment_engine.py     # Day 2 — FinBERT sentiment scores
+python ml_model.py             # Day 3 — tune & compare 4 models
 
 # 6. Launch dashboard
 streamlit run app.py
@@ -247,9 +282,9 @@ Built in 7 days:
 
 | Day | Focus | Output |
 |-----|-------|--------|
-| 1 | Data pipeline | 3 clean Parquet files, market + macro data |
-| 2 | Feature engineering + sentiment | 25-column feature matrix with FinBERT scores |
-| 3 | ML model | Trained XGBoost + SHAP explainability |
+| 1 | Data pipeline | 3 clean Parquet files, 12,550 rows of market + macro data |
+| 2 | Feature engineering + sentiment | 58-column feature matrix with 46 ML features + FinBERT scores |
+| 3 | ML model | XGBoost tuned via Optuna — ROC-AUC 0.5916, 62.66% accuracy at 0.60 threshold |
 | 4 | Regime detection + options pricer | HMM labels + Black-Scholes Greeks |
 | 5 | Portfolio optimizer + backtester | Efficient frontier + equity curve vs SPY |
 | 6 | Streamlit dashboard | 5-tab interactive app |
@@ -277,16 +312,25 @@ Get keys free at:
 ```
 alphalens/
 ├── data_ingestion.py          # Market + macro data pipeline
-├── feature_engineering.py     # Technical indicators + target variable
+├── feature_engineering.py     # 46 technical, macro, sentiment, interaction features
 ├── sentiment_engine.py        # FinBERT sentiment scoring
-├── ml_model.py                # XGBoost classifier + SHAP
+├── ml_model.py                # 4-model comparison + Optuna tuning + SHAP
 ├── quant/
 │   ├── regime_detection.py    # Hidden Markov Model
 │   ├── options_pricer.py      # Black-Scholes + Monte Carlo
 │   ├── portfolio_optimizer.py # Mean-Variance Optimization
 │   └── backtester.py          # Strategy backtesting
 ├── notebooks/
-│   └── eda.py                 # Plotly exploratory analysis
+│   ├── eda.py                 # Plotly exploratory analysis
+│   ├── architecture.svg       # Project architecture diagram
+│   ├── shap_importance.png    # SHAP feature importance plot
+│   ├── shap_beeswarm.png      # SHAP beeswarm direction plot
+│   ├── model_comparison.csv   # 4-model comparison results
+│   └── confidence_analysis.csv # Accuracy by confidence threshold
+├── models/
+│   ├── xgboost_tuned.pkl      # Winning model (auto-named by algorithm)
+│   ├── xgboost_tuned_params.pkl # Optuna best hyperparameters
+│   └── scaler.pkl             # StandardScaler for Logistic Regression
 ├── app.py                     # Streamlit dashboard
 ├── requirements.txt
 ├── .env.example
@@ -303,14 +347,17 @@ alphalens/
 - Only expected nulls are `daily_return` and `log_return` on each ticker's first row — mathematically unavoidable
 
 **Machine Learning**
-- Strict time-series train/test split to prevent look-ahead leakage
-- SHAP values to explain individual predictions — not just feature importance
-- Compared XGBoost against logistic regression baseline
+- Strict time-series train/test split — no shuffling to prevent look-ahead leakage
+- Tuned both XGBoost and LightGBM with Optuna (50 trials each) — XGBoost won at ROC-AUC 0.5916
+- Confidence threshold analysis — at 0.60 threshold accuracy jumps to 62.66% on 37.7% of trades
+- SHAP beeswarm plots show direction and magnitude of each feature's impact on predictions
+- Dynamic model saving — winner auto-named based on algorithm (e.g. `xgboost_tuned.pkl`)
+- 46 features including interaction terms: RSI × volume spike, MACD × sentiment, z-score × RSI
 
 **Quant Finance**
 - Monte Carlo validation of Black-Scholes pricer against real options chain prices
-- Portfolio optimization conditioned on ML signal — combines both worlds
-- Regime-aware strategy: only deploy capital in bull regimes
+- Portfolio optimization conditioned on ML signal — only optimizes over top predicted tickers
+- Regime-aware strategy: only deploy capital in bull regimes detected by HMM
 
 ---
 
