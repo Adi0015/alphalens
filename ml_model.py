@@ -145,8 +145,53 @@ def tune_xgboost(X_train, X_test, y_train, y_test, n_trials=50):
                    verbose=False)
     return best_model, study.best_params
 
+def tune_lightgbm(X_train, X_test, y_train, y_test, n_trials=50):
+    print("\n[4/6] Tuning LightGBM with Optuna (50 trials)...")
 
-# ── Train all models ──────────────────────────────────────────────────────────
+    def objective(trial):
+        params = {
+            "n_estimators"     : trial.suggest_int("n_estimators", 200, 1000),
+            "max_depth"        : trial.suggest_int("max_depth", 3, 7),
+            "num_leaves"       : trial.suggest_int("num_leaves", 20, 150),
+            "learning_rate"    : trial.suggest_float("learning_rate", 0.01, 0.15),
+            "subsample"        : trial.suggest_float("subsample", 0.6, 1.0),
+            "colsample_bytree" : trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            "min_child_samples": trial.suggest_int("min_child_samples", 5, 50),
+            "reg_alpha"        : trial.suggest_float("reg_alpha", 0, 1.0),
+            "reg_lambda"       : trial.suggest_float("reg_lambda", 0.5, 2.0),
+            "random_state"     : 42,
+            "verbosity"        : -1,
+        }
+        model = lgb.LGBMClassifier(**params)
+        model.fit(
+            X_train, y_train,
+            eval_set  = [(X_test, y_test)],
+            callbacks = [lgb.early_stopping(30, verbose=False),
+                         lgb.log_evaluation(period=-1)],
+        )
+        proba = model.predict_proba(X_test)[:, 1]
+        return roc_auc_score(y_test, proba)
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+    print(f"    Best ROC-AUC : {study.best_value:.4f}")
+    print(f"    Best params  : {study.best_params}")
+
+    best_model = lgb.LGBMClassifier(
+        **study.best_params,
+        random_state = 42,
+        verbosity    = -1,
+    )
+    best_model.fit(
+        X_train, y_train,
+        eval_set  = [(X_test, y_test)],
+        callbacks = [lgb.early_stopping(30, verbose=False),
+                     lgb.log_evaluation(period=-1)],
+    )
+    return best_model, study.best_params
+
+#  ── Train all models ──────────────────────────────────────────────────────────
 
 def train_all_models(X_train, X_test, y_train, y_test):
     print("\n[4/6] Training all models for comparison...")
@@ -166,21 +211,22 @@ def train_all_models(X_train, X_test, y_train, y_test):
     rf.fit(X_train, y_train)
     results["Random Forest"] = evaluate(rf, X_test, y_test)
 
-    # 3. LightGBM
-    lgb_model = lgb.LGBMClassifier(
+    # 3. LightGBM (untuned baseline)
+    lgb_base = lgb.LGBMClassifier(
         n_estimators=500, max_depth=4, learning_rate=0.05,
         subsample=0.8, colsample_bytree=0.8,
         random_state=42, verbosity=-1,
     )
-    lgb_model.fit(
+    lgb_base.fit(
         X_train, y_train,
         eval_set  = [(X_test, y_test)],
         callbacks = [lgb.early_stopping(30, verbose=False),
                      lgb.log_evaluation(period=-1)],
     )
-    results["LightGBM"] = evaluate(lgb_model, X_test, y_test)
+    results["LightGBM (baseline)"] = evaluate(lgb_base, X_test, y_test)
 
-    return results, scaler, lgb_model
+    # always return 3 values
+    return results, scaler, lgb_base
 
 
 # ── Confidence threshold analysis ────────────────────────────────────────────
@@ -236,7 +282,6 @@ def explain_model(model, X_test, feature_cols):
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     print("=" * 55)
     print("  AlphaLens — Day 3: ML Return Predictor (Enhanced)")
@@ -245,16 +290,16 @@ if __name__ == "__main__":
     df, feature_cols = load_data()
     X_train, X_test, y_train, y_test = time_series_split(df, feature_cols)
 
-    # Tune XGBoost with Optuna
-    xgb_model, best_params = tune_xgboost(X_train, X_test,
+    # Tune both models
+    xgb_model, xgb_params = tune_xgboost(X_train, X_test,
+                                          y_train, y_test, n_trials=50)
+    lgb_model, lgb_params = tune_lightgbm(X_train, X_test,
                                            y_train, y_test, n_trials=50)
 
     # Compare all models
-    results, scaler, lgb_model = train_all_models(X_train, X_test,
-                                                   y_train, y_test)
-
-    # Add tuned XGBoost to results
-    results["XGBoost (tuned)"] = evaluate(xgb_model, X_test, y_test)
+    results, scaler, _ = train_all_models(X_train, X_test, y_train, y_test)
+    results["XGBoost (tuned)"]  = evaluate(xgb_model, X_test, y_test)
+    results["LightGBM (tuned)"] = evaluate(lgb_model, X_test, y_test)
 
     # Print comparison table
     comparison = pd.DataFrame(results).T.sort_values("ROC-AUC", ascending=False)
@@ -266,24 +311,26 @@ if __name__ == "__main__":
 
     comparison.to_csv("notebooks/model_comparison.csv")
 
-    # Confidence analysis on best model
-    conf_df = confidence_analysis(xgb_model, X_test, y_test)
+    # Pick the best model automatically
+    best_name  = comparison.index[0]
+    best_model = xgb_model if "XGBoost" in best_name else lgb_model
+    best_params = xgb_params if "XGBoost" in best_name else lgb_params
+    print(f"\n    Winner: {best_name}")
+
+    # Confidence analysis + SHAP on winner
+    conf_df = confidence_analysis(best_model, X_test, y_test)
     conf_df.to_csv("notebooks/confidence_analysis.csv", index=False)
+    explain_model(best_model, X_test, feature_cols)
 
-    # SHAP on best model
-    explain_model(xgb_model, X_test, feature_cols)
-
-    # Save best model
-    joblib.dump(xgb_model, "models/xgboost_model.pkl")
-    joblib.dump(scaler,    "models/scaler.pkl")
+    # Save winner
+    joblib.dump(best_model,  "models/best_model.pkl")
+    joblib.dump(scaler,      "models/scaler.pkl")
     joblib.dump(best_params, "models/best_params.pkl")
-    print("\n    Saved: models/xgboost_model.pkl")
-    print("    Saved: models/best_params.pkl")
+    joblib.dump(best_name,   "models/best_model_name.pkl")
 
-    best = comparison.index[0]
     print("\n" + "=" * 55)
-    print(f"  Best model    : {best}")
-    print(f"  ROC-AUC       : {comparison.loc[best, 'ROC-AUC']}")
-    print(f"  Accuracy      : {comparison.loc[best, 'Accuracy']}")
+    print(f"  Best model : {best_name}")
+    print(f"  ROC-AUC    : {comparison.loc[best_name, 'ROC-AUC']}")
+    print(f"  Accuracy   : {comparison.loc[best_name, 'Accuracy']}")
     print("=" * 55)
     print("\nDay 3 complete — ready for Day 4!")
