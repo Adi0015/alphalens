@@ -6,3 +6,4 @@ data/
 *.parquet
 .DS_Store
 notebooks/*.html
+models/*.pkl
