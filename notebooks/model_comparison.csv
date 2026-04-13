@@ -1,6 +1,6 @@
 ,Accuracy,F1,ROC-AUC
-XGBoost (tuned),0.5706,0.6456,0.5901
-LightGBM (tuned),0.5413,0.7024,0.5785
+XGBoost (tuned),0.5761,0.6773,0.5916
 Random Forest,0.5393,0.6964,0.5725
+LightGBM (tuned),0.5413,0.7024,0.5723
 Logistic Regression,0.5463,0.6415,0.5443
 LightGBM (baseline),0.5413,0.7024,0.4498
