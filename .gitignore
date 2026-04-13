@@ -6,4 +6,8 @@ data/
 *.parquet
 .DS_Store
 notebooks/*.html
+!notebooks/regime_chart.html
+!notebooks/greeks_heatmap.html
+!notebooks/mc_paths.html
+!notebooks/bs_vs_market.html
 models/*.pkl
