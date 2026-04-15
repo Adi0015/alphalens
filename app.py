@@ -9,6 +9,8 @@ import shap
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import os
+
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -23,7 +25,14 @@ st.set_page_config(
 
 @st.cache_data
 def load_features():
-    df = pd.read_parquet("data/final_features.parquet")
+    BASE_DIR = os.path.dirname(__file__)
+    path = os.path.join(BASE_DIR, "data", "final_features.parquet")
+
+    if not os.path.exists(path):
+        st.error("❌ final_features.parquet not found. Using fallback sample data.")
+        path = os.path.join(BASE_DIR, "data", "sample_features.parquet")
+
+    df = pd.read_parquet(path)
     df["date"] = pd.to_datetime(df["date"])
     return df
 
