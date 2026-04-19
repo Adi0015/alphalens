@@ -289,38 +289,6 @@ alphalens/
 └── README.md
 ```
 
----
 
-## Interview Talking Points
-
-**On project focus** — *"The core question is simple: does a systematic ML signal have an edge in equity markets? Everything — the pipeline, features, sentiment, quant engine, dashboard — exists to answer that one question rigorously."*
-
-**On the metrics** — *"57% raw accuracy sounds modest, but financial prediction benchmarks are different from ImageNet. Out-of-sample ROC-AUC of 0.59 on 5 years of equity data is statistically meaningful. More importantly, the confidence threshold analysis shows the model knows when it's confident — at 0.60 threshold we hit 62.7% accuracy, which is the signal a real trading desk would act on."*
-
-**On engineering decisions** — *"Used `merge_asof` with `direction='backward'` for the macro join — the only correct way to join monthly data onto daily data without look-ahead bias. Strict time-series split with no shuffling. Optuna hyperparameter search across 8 parameters × 50 trials × 2 models."*
-
-**On the HMM** — *"The Hidden Markov Model is particularly useful here because market regimes are persistent — the model shows bull markets stay bull 97.3% of the time day-to-day. That persistence is what makes regime filtering useful: once you identify the regime, it's likely to stay there long enough to act on."*
-
-**On the options pricer** — *"Black-Scholes and Monte Carlo converge to within $0.003 on ATM options — that's the mathematical validation. Comparing against real AAPL market prices shows a median error of $0.10, which is within bid-ask spread for liquid contracts."*
-
----
-
-## Resume Bullet Points
-
-```
-Built a full quant research pipeline ingesting 5 years of market + macroeconomic data;
-engineered 46 features (technical indicators, macro regime, FinBERT sentiment, interaction
-terms) with a strict time-series split to eliminate look-ahead bias.
-
-Tuned XGBoost and LightGBM with Optuna (50 trials each); XGBoost achieved ROC-AUC 0.592 —
-at 0.60 confidence threshold, accuracy rises to 62.7% on 37.7% of trades, demonstrating a
-consistent directional edge.
-
-Implemented a quant engine with Hidden Markov Model regime detection (bull Sharpe 1.54 vs
-bear 0.58), Black-Scholes + Monte Carlo options pricer (median error $0.10 vs market), and a
-regime-filtered backtester benchmarked against SPY.
-```
-
----
 
 *Built by Adi0015 · April 2026*
